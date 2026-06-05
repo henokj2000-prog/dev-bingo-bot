@@ -1,0 +1,192 @@
+<!><td>${p.wins||0}</td><td>${(p.total_won||0).toFixed(0)} ETB</td><td>${p.is_banned ? badge('banned') : badge('approved')}</td><td><div class="btn-gap"><button class="btn btn-gold" onclick="openBonusModalFor(${p.user_id})">🎁</button>${p.is_banned ? `<button class="btn btn-green" onclick="banPlayer(${p.user_id}, false)">✅ Unban</button>` : `<button class="btn btn-red" onclick="banPlayer(${p.user_id}, true)">🚫 Ban</button>`}</div></td></tr>`).join('');
+}
+async function banPlayer(userId, ban){ if(!confirm(`Are you sure to ${ban?'ban':'unban'} player ${userId}?`)) return; const res = await adminFetch('/admin/ban_player','POST',{user_id:userId, ban}); if(res?.success){ alert('✅ '+res.message); loadPlayers(); } else alert('❌ '+(res?.error||'Failed')); }
+function openBonusModal() { document.getElementById('bonusPhone').value=''; document.getElementById('bonusUserName').innerHTML=''; window.bonusUserId=null; document.getElementById('bonusModal').classList.add('open'); }
+function openBonusModalFor(uid) { openBonusModal(); }
+function closeModal(id){ document.getElementById(id).classList.remove('open'); }
+let bonusUserId = null;
+async function fetchUserByPhone(){
+  const phone = document.getElementById('bonusPhone').value.trim();
+  if(!phone){ alert('Enter phone number'); return; }
+  const res = await adminFetch('/admin/api/get_user_by_phone','POST',{phone});
+  if(res && res.user_id){
+    bonusUserId = res.user_id;
+    document.getElementById('bonusUserName').innerHTML = `✅ Found: ${res.full_name} (ID: ${res.user_id})`;
+  } else { alert(res?.error || 'User not found'); bonusUserId = null; document.getElementById('bonusUserName').innerHTML = ''; }
+}
+async function submitBonusByPhone(){
+  if(!bonusUserId){ alert('Fetch user first'); return; }
+  const amount = parseFloat(document.getElementById('bonusAmount').value);
+  const reason = document.getElementById('bonusReason').value.trim() || 'Admin bonus';
+  if(isNaN(amount) || amount<=0){ alert('Enter valid amount'); return; }
+  const res = await adminFetch('/admin/give_bonus','POST',{user_id:bonusUserId, amount, reason});
+  if(res && res.success){ alert('✅ '+res.message); closeModal('bonusModal'); loadPlayers(); loadOverview(); }
+  else alert('❌ '+(res?.error||'Failed'));
+}
+async function submitBonusAll(){
+  const amount = parseFloat(document.getElementById('bonusAllAmount').value);
+  const reason = document.getElementById('bonusAllReason').value.trim() || 'Admin bonus';
+  if(!amount || amount<=0){ alert('Enter valid amount'); return; }
+  if(!confirm(`Give ${amount} ETB to ALL non‑banned players?`)) return;
+  const res = await adminFetch('/admin/give_bonus_all','POST',{amount, reason});
+  if(res && res.success){ alert('✅ '+res.message); closeModal('bonusAllModal'); loadPlayers(); loadOverview(); }
+  else alert('❌ '+(res?.error||'Failed'));
+}
+async function loadGames(){
+  const data = await adminFetch('/admin/api/active_games');
+  if(!data) return;
+  const games = data.games || [];
+  const tb = document.getElementById('gameTable');
+  if(!games.length){ tb.innerHTML='<tr><td colspan="8" class="empty">No active games</td></tr>'; return; }
+  tb.innerHTML = games.map(g => `<tr><td>#${g.id}</td><td><b style="color:var(--gold)">${g.stake} ETB</b></td><td>${badge(g.status)}</td><td>${(g.prize_pool||0).toFixed(2)} ETB</td><td>${g.card_count||0}</td><td>${JSON.parse(g.drawn_balls||'[]').length}/75</td><td style="font-size:11px">${fmtDate(g.created_at)}</td><td><button class="btn btn-red" onclick="forceFinish(${g.id})">⛔ Force Finish</button></td></tr>`).join('');
+}
+async function forceFinish(gameId){ if(!confirm(`Force finish game #${gameId}? Refund all players.`)) return; const res = await adminFetch('/admin/force_finish','POST',{game_id:gameId}); if(res?.success){ alert('✅ '+res.message); loadGames(); loadOverview(); } else alert('❌ '+(res?.error||'Failed')); }
+async function sendNotification(){
+  const msg = document.getElementById('notifyMsg').value.trim();
+  if(!msg){ alert('Please enter a message'); return; }
+  const sendTelegram = document.getElementById('sendTelegramCheckbox').checked;
+  const res = await adminFetch('/admin/api/send_notification','POST',{message:msg, send_telegram:sendTelegram});
+  if(res && res.success){ alert('✅ '+res.message); document.getElementById('notifyMsg').value=''; document.getElementById('sendTelegramCheckbox').checked=false; loadNotifications(); }
+  else alert('❌ '+(res?.error||'Failed'));
+}
+async function loadNotifications(){
+  const data = await adminFetch('/admin/api/notifications');
+  if(!data) return;
+  const tb = document.getElementById('notifyTable');
+  if(!data.notifications || data.notifications.length===0){ tb.innerHTML='<tr><td colspan="2" class="empty">No notifications sent yet</td></tr>'; return; }
+  tb.innerHTML = data.notifications.map(n => `<tr><td style="white-space:nowrap">${fmtDate(n.created_at)}</td><td>${escapeHtml(n.message)}</td></tr>`).join('');
+}
+function escapeHtml(str){ return str.replace(/[&<>]/g, function(m){ if(m==='&') return '&amp;'; if(m==='<') return '&lt;'; if(m==='>') return '&gt;'; return m; }); }
+async function loadSettings(){
+  const tele = await adminFetch('/api/settings/telebirr_number');
+  const cbe = await adminFetch('/api/settings/cbe_number');
+  if(tele && tele.telebirr_number) document.getElementById('telebirrNumber').value = tele.telebirr_number;
+  if(cbe && cbe.cbe_number) document.getElementById('cbeNumber').value = cbe.cbe_number;
+}
+async function saveSettings(){
+  const tele = document.getElementById('telebirrNumber').value.trim();
+  const cbe = document.getElementById('cbeNumber').value.trim();
+  const res = await adminFetch('/admin/api/update_settings','POST',{telebirr_number:tele, cbe_number:cbe});
+  if(res && res.success){ alert('✅ Settings updated!'); loadSettings(); }
+  else alert('❌ Failed to update');
+}
+async function loadDepositBonus(){
+  const res = await adminFetch('/api/settings/deposit_bonus_percent');
+  if(res && res.deposit_bonus_percent !== undefined) document.getElementById('depositBonusPercent').value = res.deposit_bonus_percent;
+}
+async function saveDepositBonus(){
+  const percent = parseFloat(document.getElementById('depositBonusPercent').value);
+  if(isNaN(percent) || percent < 0 || percent > 100){ alert('Enter a valid percentage (0-100)'); return; }
+  const res = await adminFetch('/admin/api/set_deposit_bonus','POST',{percent});
+  if(res && res.success){ alert('✅ '+res.message); loadDepositBonus(); }
+  else alert('❌ '+(res?.error||'Failed'));
+}
+
+// --- COMMISSION SPECIFIC FUNCTIONS ---
+async function loadPendingCommissions() {
+  const res = await adminFetch('/admin/api/pending_commissions');
+  if(!res) return;
+  const tbody = document.getElementById('pendingCommissionsTable');
+  if(!res.commissions || res.commissions.length===0){
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No pending commissions</td></tr>';
+    return;
+  }
+  tbody.innerHTML = res.commissions.map(c => `
+    <tr>
+      <td><input type="checkbox" class="pending-select" data-id="${c.id}"></td>
+      <td>${c.id}</td>
+      <td>${c.referrer_name} (${c.referrer_id})</td>
+      <td>${c.amount} ETB</td>
+      <td>${c.reason}</td>
+      <td>${fmtDate(c.created_at)}</td>
+      <td><button class="btn btn-gold" onclick="paySingle(${c.id})">Pay</button> <button class="btn btn-red" onclick="revokeSingle(${c.id})">Revoke</button></td>
+    </tr>
+  `).join('');
+  document.getElementById('selectAllPending').onclick = (e) => {
+    document.querySelectorAll('.pending-select').forEach(cb => cb.checked = e.target.checked);
+  };
+}
+async function loadPaidCommissions() {
+  const res = await adminFetch('/admin/api/paid_commissions');
+  if(!res) return;
+  const tbody = document.getElementById('paidCommissionsTable');
+  if(!res.commissions || res.commissions.length===0){
+    tbody.innerHTML = '<tr><td colspan="7" class="empty">No paid commissions</td></tr>';
+    return;
+  }
+  tbody.innerHTML = res.commissions.map(c => `
+    <tr>
+      <td>${c.id}</td>
+      <td>${c.referrer_name} (${c.referrer_id})</td>
+      <td>${c.amount} ETB</td>
+      <td>${c.reason}</td>
+      <td>${c.paid_at ? fmtDate(c.paid_at) : ''}</td>
+      <td>${c.payment_reference || ''}</td>
+      <td><button class="btn btn-red" onclick="revokeSingle(${c.id})">Revoke</button></td>
+    </tr>
+  `).join('');
+}
+async function paySingle(commissionId) {
+  const ref = prompt('Enter Telebirr/CBE transaction reference:');
+  if(!ref) return;
+  const res = await adminFetch('/admin/api/mark_commission_paid', 'POST', { commission_id: commissionId, payment_reference: ref });
+  if(res && res.success){
+    alert('✅ '+res.message);
+    loadPendingCommissions();
+    loadPaidCommissions();
+  } else alert('❌ '+(res?.error||'Failed'));
+}
+async function revokeSingle(commissionId) {
+  if(!confirm('Revoke this commission? Amount will be deducted from referrer balance.')) return;
+  const res = await adminFetch('/admin/api/revoke_commission', 'POST', { commission_ids: [commissionId] });
+  if(res && res.success){
+    alert('✅ '+res.message);
+    loadPendingCommissions();
+    loadPaidCommissions();
+  } else alert('❌ '+(res?.error||'Failed'));
+}
+async function batchPaySelected() {
+  const ref = document.getElementById('batchPaymentReference').value.trim();
+  if(!ref){ alert('Enter a payment reference'); return; }
+  const selected = Array.from(document.querySelectorAll('.pending-select:checked')).map(cb => parseInt(cb.dataset.id));
+  if(selected.length === 0){ alert('No commissions selected'); return; }
+  if(!confirm(`Pay ${selected.length} commission(s) with reference ${ref}?`)) return;
+  let success=0, fail=0;
+  for(let id of selected){
+    const res = await adminFetch('/admin/api/mark_commission_paid', 'POST', { commission_id: id, payment_reference: ref });
+    if(res && res.success) success++; else fail++;
+  }
+  alert(`✅ Paid: ${success}, ❌ Failed: ${fail}`);
+  loadPendingCommissions();
+  loadPaidCommissions();
+}
+async function batchRevokeSelected() {
+  const selected = Array.from(document.querySelectorAll('.pending-select:checked')).map(cb => parseInt(cb.dataset.id));
+  if(selected.length === 0){ alert('No commissions selected'); return; }
+  if(!confirm(`Revoke ${selected.length} commission(s)? Amount will be deducted from referrer balances.`)) return;
+  const res = await adminFetch('/admin/api/revoke_commission', 'POST', { commission_ids: selected });
+  if(res && res.success){
+    alert('✅ '+res.message);
+    loadPendingCommissions();
+    loadPaidCommissions();
+  } else alert('❌ '+(res?.error||'Failed'));
+}
+
+function loadAllData(){
+  loadOverview();
+  loadDeposits();
+  loadWithdrawals();
+  loadPlayers();
+  loadGames();
+  const activeTab = document.querySelector('.tab.active')?.textContent.trim().toLowerCase() || '';
+  if(activeTab.includes('notifications')) loadNotifications();
+  if(activeTab.includes('settings')) { loadSettings(); loadDepositBonus(); }
+  if(activeTab.includes('pending commissions')) loadPendingCommissions();
+  if(activeTab.includes('paid commissions')) loadPaidCommissions();
+  document.getElementById('lastRefreshed').textContent = 'Refreshed ' + new Date().toLocaleTimeString();
+}
+document.querySelectorAll('.modal-bg').forEach(m => m.addEventListener('click', e => { if(e.target===m) m.classList.remove('open'); }));
+document.getElementById('loginInput').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
+</script>
+</body>
+</html>
