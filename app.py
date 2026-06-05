@@ -246,7 +246,7 @@ def parse_sms_reference(sms_text, platform):
 
 @app.route('/api/referral_link/<int:user_id>')
 def referral_link(user_id):
-    bot_username = "Dev_bingo_bot"
+    bot_username = "Devbingo_bot"
     link = f"https://t.me/{bot_username}?start=ref_{user_id}"
     return jsonify({'link': link})
 
