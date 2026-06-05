@@ -1,4 +1,6 @@
-from flask import Flask, request, jsonify, send_from_directory
+git add app.py
+git commit -m "Fix bot username in referral link"
+git push origin mainfrom flask import Flask, request, jsonify, send_from_directory
 import sqlite3, json, time, os, threading, re
 import requests
 from datetime import datetime
