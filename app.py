@@ -1,6 +1,4 @@
-git add app.py
-git commit -m "Fix bot username in referral link"
-git push origin mainfrom flask import Flask, request, jsonify, send_from_directory
+from flask import Flask, request, jsonify, send_from_directory
 import sqlite3, json, time, os, threading, re
 import requests
 from datetime import datetime
@@ -246,12 +244,55 @@ def parse_sms_reference(sms_text, platform):
             return amount, ref
     return None, sms_text
 
+# -------------------- TELEGRAM WEBHOOK --------------------
+def send_telegram_message(chat_id, text, reply_markup=None):
+    bot_token = os.environ.get('BOT_TOKEN')
+    if not bot_token:
+        return False
+    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
+    payload = {'chat_id': chat_id, 'text': text, 'parse_mode': 'Markdown'}
+    if reply_markup:
+        payload['reply_markup'] = json.dumps(reply_markup)
+    try:
+        r = requests.post(url, json=payload, timeout=5)
+        return r.ok
+    except:
+        return False
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    try:
+        update = request.get_json()
+        if not update:
+            return jsonify({'status': 'error', 'message': 'No data'}), 400
+        if 'message' in update:
+            chat_id = update['message']['chat']['id']
+            text = update['message'].get('text', '')
+            if text == '/start':
+                game_url = f"https://{request.host}"
+                keyboard = {
+                    'inline_keyboard': [
+                        [{'text': '🎮 Play Nef Bingo', 'web_app': {'url': game_url}}]
+                    ]
+                }
+                send_telegram_message(
+                    chat_id,
+                    "Welcome to Nef Bingo!\n\nClick the button below to start playing and win real money.",
+                    reply_markup=keyboard
+                )
+        return jsonify({'status': 'ok'}), 200
+    except Exception as e:
+        print(f"Webhook error: {e}")
+        return jsonify({'status': 'error', 'message': str(e)}), 500
+
+# -------------------- REFERRAL LINK ENDPOINT --------------------
 @app.route('/api/referral_link/<int:user_id>')
 def referral_link(user_id):
     bot_username = "Devbingo_bot"
     link = f"https://t.me/{bot_username}?start=ref_{user_id}"
     return jsonify({'link': link})
 
+# -------------------- MODIFIED /api/player --------------------
 @app.route('/api/player/<int:user_id>')
 def get_player(user_id):
     username = request.args.get('username', 'user')
@@ -282,6 +323,7 @@ def get_player(user_id):
     db.close()
     return jsonify(result)
 
+# -------------------- GAME ROUTES --------------------
 _join_lock = threading.Lock()
 
 @app.route('/api/join_game', methods=['POST'])
@@ -432,7 +474,6 @@ def deposit():
             bonus_amount = round(amount * bonus_percent / 100, 2)
             db.execute('UPDATE players SET balance=balance+? WHERE user_id=?', (bonus_amount, user_id))
             print(f"🎁 Deposit bonus: {bonus_percent}% = +{bonus_amount} ETB for user {user_id}")
-        # ***** DEPOSIT REFERRAL COMMISSION (1%) *****
         referrer = db.execute('SELECT referrer_id FROM players WHERE user_id=?', (user_id,)).fetchone()
         if referrer and referrer['referrer_id']:
             dep_comm = round(amount * 0.01, 2)
@@ -454,12 +495,10 @@ def deposit():
     return jsonify({'success': True, 'approved': False, 'message': '⏳ Deposit submitted for admin review.'})
 
 MIN_WITHDRAWAL = 50
-
 @app.route('/api/withdraw', methods=['POST'])
 def withdraw():
     data = request.json
     amount = data.get('amount', 0)
-    # Withdrawal time check (Ethiopia time)
     now = datetime.now()
     current_hour = now.hour
     if current_hour < 5 or current_hour >= 14:
@@ -510,147 +549,11 @@ def get_setting(key):
         return jsonify({key: row['value']})
     return jsonify({key: None}), 404
 
-@app.route('/admin/api/update_settings', methods=['POST'])
-def update_settings():
-    data = request.json
-    if not admin_auth(data):
-        return jsonify({'error': 'Unauthorized'}), 403
-    telebirr = data.get('telebirr_number', '').strip()
-    cbe = data.get('cbe_number', '').strip()
-    db = get_db()
-    if telebirr:
-        db.execute('UPDATE settings SET value = ? WHERE key = "telebirr_number"', (telebirr,))
-    if cbe:
-        db.execute('UPDATE settings SET value = ? WHERE key = "cbe_number"', (cbe,))
-    db.commit()
-    db.close()
-    return jsonify({'success': True})
-
-@app.route('/admin/api/set_deposit_bonus', methods=['POST'])
-def set_deposit_bonus():
-    data = request.json
-    if not admin_auth(data):
-        return jsonify({'error': 'Unauthorized'}), 403
-    percent = data.get('percent', 0)
-    try:
-        percent = float(percent)
-        if percent < 0 or percent > 100:
-            raise ValueError
-    except:
-        return jsonify({'error': 'Percentage must be between 0 and 100'}), 400
-    db = get_db()
-    db.execute("UPDATE settings SET value = ? WHERE key = 'deposit_bonus_percent'", (str(percent),))
-    db.commit()
-    db.close()
-    return jsonify({'success': True, 'message': f'Deposit bonus set to {percent}%'})
-
-@app.route('/api/notifications/latest')
-def latest_notification():
-    db = get_db()
-    note = db.execute('SELECT message, created_at FROM notifications ORDER BY created_at DESC LIMIT 1').fetchone()
-    db.close()
-    if note:
-        return jsonify({'message': note['message'], 'timestamp': note['created_at']})
-    return jsonify({'message': None})
-
-@app.route('/admin/api/send_notification', methods=['POST'])
-def send_notification():
-    data = request.json
-    if not admin_auth(data):
-        return jsonify({'error': 'Unauthorized'}), 403
-    message = data.get('message', '').strip()
-    send_telegram = data.get('send_telegram', False)
-    if not message:
-        return jsonify({'error': 'Message cannot be empty'}), 400
-    db = get_db()
-    db.execute('INSERT INTO notifications (message, created_at) VALUES (?, ?)', (message, time.time()))
-    db.commit()
-    tele_count = 0
-    if send_telegram:
-        players = db.execute('SELECT chat_id FROM players WHERE chat_id IS NOT NULL AND chat_id != ""').fetchall()
-        for p in players:
-            if send_telegram_message(p['chat_id'], message):
-                tele_count += 1
-    db.close()
-    return jsonify({'success': True, 'message': f'In‑app notification sent. Telegram sent to {tele_count} players.'})
-
-@app.route('/admin/api/notifications')
-def admin_notifications():
-    if request.args.get('password') != ADMIN_PASSWORD:
-        return jsonify({'error': 'Unauthorized'}), 403
-    db = get_db()
-    notes = db.execute('SELECT id, message, created_at FROM notifications ORDER BY created_at DESC LIMIT 50').fetchall()
-    db.close()
-    return jsonify({'notifications': [dict(n) for n in notes]})
-
-@app.route('/api/set_chat_id', methods=['POST'])
-def set_chat_id():
-    data = request.json
-    user_id = data.get('user_id')
-    chat_id = data.get('chat_id')
-    if not user_id or not chat_id:
-        return jsonify({'error': 'User ID and Chat ID required'}), 400
-    db = get_db()
-    db.execute('UPDATE players SET chat_id = ? WHERE user_id = ?', (chat_id, user_id))
-    db.commit()
-    db.close()
-    return jsonify({'success': True})
-
-@app.route('/api/sms_webhook', methods=['POST'])
-def sms_webhook():
-    data = request.get_json()
-    if not data or 'content' not in data:
-        return jsonify({'error': 'Invalid SMS data'}), 400
-    sms_content = data['content']
-    amount, ref = parse_sms_reference(sms_content, 'telebirr')
-    if not amount:
-        amount, ref = parse_sms_reference(sms_content, 'cbe')
-    if not amount or not ref:
-        return jsonify({'error': 'Could not parse amount/reference from SMS'}), 400
-    db = get_db()
-    deposit = db.execute('SELECT * FROM deposits WHERE tx_ref = ? AND status = "pending"', (ref,)).fetchone()
-    if not deposit:
-        db.close()
-        return jsonify({'error': f'No pending deposit with reference {ref}'}), 404
-    if abs(deposit['amount'] - amount) > 5:
-        db.close()
-        return jsonify({'error': f'Amount mismatch: SMS {amount}, deposit {deposit["amount"]}'}), 400
-    db.execute('UPDATE deposits SET status = "approved" WHERE id = ?', (deposit['id'],))
-    db.execute('UPDATE players SET balance = balance + ? WHERE user_id = ?', (deposit['amount'], deposit['user_id']))
-    bonus_percent = db.execute("SELECT value FROM settings WHERE key = 'deposit_bonus_percent'").fetchone()
-    bonus_percent = float(bonus_percent['value']) if bonus_percent else 0
-    if bonus_percent > 0:
-        bonus_amount = round(deposit['amount'] * bonus_percent / 100, 2)
-        db.execute('UPDATE players SET balance = balance + ? WHERE user_id = ?', (bonus_amount, deposit['user_id']))
-    # ***** DEPOSIT REFERRAL COMMISSION IN WEBHOOK *****
-    referrer = db.execute('SELECT referrer_id FROM players WHERE user_id=?', (deposit['user_id'],)).fetchone()
-    if referrer and referrer['referrer_id']:
-        dep_comm = round(deposit['amount'] * 0.01, 2)
-        if dep_comm > 0:
-            db.execute('''
-                INSERT INTO referral_commissions (referrer_id, referred_user_id, amount, reason, original_amount, created_at, status)
-                VALUES (?, ?, ?, 'deposit', ?, ?, 'pending')
-            ''', (referrer['referrer_id'], deposit['user_id'], dep_comm, deposit['amount'], time.time()))
-    db.commit()
-    db.close()
-    return jsonify({'success': True, 'message': 'Deposit auto-approved'})
-
+# -------------------- ADMIN ROUTES --------------------
 ADMIN_PASSWORD = 'nefbingo2026'
 
 def admin_auth(data):
     return data.get('password') == ADMIN_PASSWORD
-
-def send_telegram_message(chat_id, text):
-    bot_token = os.environ.get('BOT_TOKEN')
-    if not bot_token:
-        return False
-    url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-    payload = {'chat_id': chat_id, 'text': f"📢 *NEF BINGO Announcement*\n\n{text}", 'parse_mode': 'Markdown'}
-    try:
-        r = requests.post(url, json=payload, timeout=5)
-        return r.ok
-    except:
-        return False
 
 @app.route('/admin')
 def admin():
@@ -894,7 +797,7 @@ def auto_verify_deposit():
     db.close()
     return jsonify({'success': True, 'message': f'Deposit #{dep["id"]} auto-approved.'})
 
-# -------------------- NEW ADMIN COMMISSION ENDPOINTS --------------------
+# -------------------- COMMISSION ADMIN ROUTES --------------------
 @app.route('/admin/api/pending_commissions')
 def admin_pending_commissions():
     if request.args.get('password') != ADMIN_PASSWORD:
@@ -989,6 +892,97 @@ def mark_commission_paid():
     db.close()
     return jsonify({'success': True, 'message': f'Commission {commission_id} marked as paid.'})
 
+# -------------------- NOTIFICATIONS --------------------
+@app.route('/api/notifications/latest')
+def latest_notification():
+    db = get_db()
+    note = db.execute('SELECT message, created_at FROM notifications ORDER BY created_at DESC LIMIT 1').fetchone()
+    db.close()
+    if note:
+        return jsonify({'message': note['message'], 'timestamp': note['created_at']})
+    return jsonify({'message': None})
+
+@app.route('/admin/api/send_notification', methods=['POST'])
+def send_notification():
+    data = request.json
+    if not admin_auth(data):
+        return jsonify({'error': 'Unauthorized'}), 403
+    message = data.get('message', '').strip()
+    send_telegram = data.get('send_telegram', False)
+    if not message:
+        return jsonify({'error': 'Message cannot be empty'}), 400
+    db = get_db()
+    db.execute('INSERT INTO notifications (message, created_at) VALUES (?, ?)', (message, time.time()))
+    db.commit()
+    tele_count = 0
+    if send_telegram:
+        players = db.execute('SELECT chat_id FROM players WHERE chat_id IS NOT NULL AND chat_id != ""').fetchall()
+        for p in players:
+            if send_telegram_message(p['chat_id'], message):
+                tele_count += 1
+    db.close()
+    return jsonify({'success': True, 'message': f'In‑app notification sent. Telegram sent to {tele_count} players.'})
+
+@app.route('/admin/api/notifications')
+def admin_notifications():
+    if request.args.get('password') != ADMIN_PASSWORD:
+        return jsonify({'error': 'Unauthorized'}), 403
+    db = get_db()
+    notes = db.execute('SELECT id, message, created_at FROM notifications ORDER BY created_at DESC LIMIT 50').fetchall()
+    db.close()
+    return jsonify({'notifications': [dict(n) for n in notes]})
+
+@app.route('/api/set_chat_id', methods=['POST'])
+def set_chat_id():
+    data = request.json
+    user_id = data.get('user_id')
+    chat_id = data.get('chat_id')
+    if not user_id or not chat_id:
+        return jsonify({'error': 'User ID and Chat ID required'}), 400
+    db = get_db()
+    db.execute('UPDATE players SET chat_id = ? WHERE user_id = ?', (chat_id, user_id))
+    db.commit()
+    db.close()
+    return jsonify({'success': True})
+
+@app.route('/api/sms_webhook', methods=['POST'])
+def sms_webhook():
+    data = request.get_json()
+    if not data or 'content' not in data:
+        return jsonify({'error': 'Invalid SMS data'}), 400
+    sms_content = data['content']
+    amount, ref = parse_sms_reference(sms_content, 'telebirr')
+    if not amount:
+        amount, ref = parse_sms_reference(sms_content, 'cbe')
+    if not amount or not ref:
+        return jsonify({'error': 'Could not parse amount/reference from SMS'}), 400
+    db = get_db()
+    deposit = db.execute('SELECT * FROM deposits WHERE tx_ref = ? AND status = "pending"', (ref,)).fetchone()
+    if not deposit:
+        db.close()
+        return jsonify({'error': f'No pending deposit with reference {ref}'}), 404
+    if abs(deposit['amount'] - amount) > 5:
+        db.close()
+        return jsonify({'error': f'Amount mismatch: SMS {amount}, deposit {deposit["amount"]}'}), 400
+    db.execute('UPDATE deposits SET status = "approved" WHERE id = ?', (deposit['id'],))
+    db.execute('UPDATE players SET balance = balance + ? WHERE user_id = ?', (deposit['amount'], deposit['user_id']))
+    bonus_percent = db.execute("SELECT value FROM settings WHERE key = 'deposit_bonus_percent'").fetchone()
+    bonus_percent = float(bonus_percent['value']) if bonus_percent else 0
+    if bonus_percent > 0:
+        bonus_amount = round(deposit['amount'] * bonus_percent / 100, 2)
+        db.execute('UPDATE players SET balance = balance + ? WHERE user_id = ?', (bonus_amount, deposit['user_id']))
+    referrer = db.execute('SELECT referrer_id FROM players WHERE user_id=?', (deposit['user_id'],)).fetchone()
+    if referrer and referrer['referrer_id']:
+        dep_comm = round(deposit['amount'] * 0.01, 2)
+        if dep_comm > 0:
+            db.execute('''
+                INSERT INTO referral_commissions (referrer_id, referred_user_id, amount, reason, original_amount, created_at, status)
+                VALUES (?, ?, ?, 'deposit', ?, ?, 'pending')
+            ''', (referrer['referrer_id'], deposit['user_id'], dep_comm, deposit['amount'], time.time()))
+    db.commit()
+    db.close()
+    return jsonify({'success': True, 'message': 'Deposit auto-approved'})
+
 if __name__ == '__main__':
     init_db()
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)# PASTE THE ENTIRE CODE BLOCK BELOW
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)), debug=False)
