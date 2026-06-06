@@ -244,7 +244,6 @@ def parse_sms_reference(sms_text, platform):
             return amount, ref
     return None, sms_text
 
-# -------------------- TELEGRAM WEBHOOK --------------------
 def send_telegram_message(chat_id, text, reply_markup=None):
     bot_token = os.environ.get('BOT_TOKEN')
     if not bot_token:
@@ -285,19 +284,16 @@ def webhook():
         print(f"Webhook error: {e}")
         return jsonify({'status': 'error', 'message': str(e)}), 500
 
-# -------------------- ROOT ROUTE --------------------
 @app.route('/')
 def index():
     return send_from_directory('templates', 'index.html')
 
-# -------------------- REFERRAL LINK --------------------
 @app.route('/api/referral_link/<int:user_id>')
 def referral_link(user_id):
     bot_username = "Devbingo_bot"
     link = f"https://t.me/{bot_username}?start=ref_{user_id}"
     return jsonify({'link': link})
 
-# -------------------- MODIFIED /api/player --------------------
 @app.route('/api/player/<int:user_id>')
 def get_player(user_id):
     username = request.args.get('username', 'user')
@@ -328,7 +324,6 @@ def get_player(user_id):
     db.close()
     return jsonify(result)
 
-# -------------------- GAME ROUTES --------------------
 _join_lock = threading.Lock()
 
 @app.route('/api/join_game', methods=['POST'])
@@ -554,7 +549,6 @@ def get_setting(key):
         return jsonify({key: row['value']})
     return jsonify({key: None}), 404
 
-# -------------------- ADMIN ROUTES --------------------
 ADMIN_PASSWORD = 'nefbingo2026'
 
 def admin_auth(data):
@@ -802,7 +796,6 @@ def auto_verify_deposit():
     db.close()
     return jsonify({'success': True, 'message': f'Deposit #{dep["id"]} auto-approved.'})
 
-# -------------------- COMMISSION ADMIN ROUTES --------------------
 @app.route('/admin/api/pending_commissions')
 def admin_pending_commissions():
     if request.args.get('password') != ADMIN_PASSWORD:
@@ -897,7 +890,6 @@ def mark_commission_paid():
     db.close()
     return jsonify({'success': True, 'message': f'Commission {commission_id} marked as paid.'})
 
-# -------------------- NOTIFICATIONS --------------------
 @app.route('/api/notifications/latest')
 def latest_notification():
     db = get_db()
